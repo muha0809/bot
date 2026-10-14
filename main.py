@@ -7,7 +7,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 
-BOT_TOKEN = "8656639262:AAF11IztAkH8vQpTibmtrutsghVZ26AuAS0"
+BOT_TOKEN = "8735100963:AAFOGPFUQqGTETyXpV0x_aQemGfbslJCY_s"
 
 REQUIRED_INVITES = 10
 DATA_FILE = "invites.json"
