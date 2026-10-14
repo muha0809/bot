@@ -7,7 +7,7 @@ from telegram.ext import (
     ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 )
 
-BOT_TOKEN = os.environ.get("8656639262:AAFl1IztAkH0vQpTibmtrutsghVZ26AuAS0")
+BOT_TOKEN = "8656639262:AAFl1IztAkH0vQpTibmtrutsghVZ26AuAS0"
 
 REQUIRED_INVITES = 10
 DATA_FILE = "invites.json"
