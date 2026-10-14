@@ -2,16 +2,16 @@ import os
 import json
 import asyncio
 import logging
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
-)
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 
-BOT_TOKEN = "8656639262:AAFl1IztAkH0vQpTibmtrutsghVZ26AuAS0"
+BOT_TOKEN = "8656639262:AAF11IztAkH8vQpTibmtrutsghVZ26AuAS0"
 
 REQUIRED_INVITES = 10
 DATA_FILE = "invites.json"
-WARNING_LIFETIME = 15  # эскертүү канча секунддан кийин өчөт
+WARNING_LIFETIME = 15
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -19,133 +19,125 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------- Веб-сервер (Render үчүн порт талабын аткаруу) ----------
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
 
-# ---------- Маалыматты файлга сактоо (бот өчүп күйсө да жоголбойт) ----------
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
+
+# ---------- Маалыматты файлга сактоо ----------
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            logger.exception("invites.json окулган жок")
+        except Exception as e:
+            logger.error(f"Файлды окууда ката: {e}")
     return {}
 
-
-def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_invites, f)
-
-
-user_invites = load_data()  # ачкыч: "chat_id:user_id" -> сан
-
-
-def make_key(chat_id, user_id):
-    return f"{chat_id}:{user_id}"
-
-
-async def delete_later(message, delay):
-    await asyncio.sleep(delay)
+def save_data(data):
     try:
-        await message.delete()
-    except Exception:
-        pass
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        logger.error(f"Файлга жазууда ката: {e}")
 
+user_invites = load_data()
 
-# ---------- /start ----------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "🇰🇬 Салам! Бул группага жумуш жарыясын жазуу үчүн "
-        f"{REQUIRED_INVITES} адам чакырууңуз керек.\n\n"
-        "🇷🇺 Здравствуйте! Чтобы публиковать объявления в этой группе, "
-        f"вам нужно пригласить {REQUIRED_INVITES} человек."
+        "🇰🇬 Салам! Бул группага жумуш жарыясын жазуу үчүн 10 адам чакырууңуз керек.\n\n"
+        "🇷🇺 Здравствуйте! Чтобы публиковать объявления в этой группе, нужно пригласить 10 человек."
     )
     await update.message.reply_text(msg)
 
-
-# ---------- Чакыруулду эсептөө ----------
 async def track_invites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    if not message or not message.from_user:
-        return
-
     inviter = message.from_user
-    new_members = message.new_chat_members or []
+    new_members = message.new_chat_members
 
-    # Ботторду жана өзү шилтеме менен кошулгандарды санабайбыз
-    added = [m for m in new_members if not m.is_bot and m.id != inviter.id]
-    if not added:
-        return
+    if new_members and inviter:
+        user_id_str = str(inviter.id)
+        if user_id_str not in user_invites:
+            user_invites[user_id_str] = 0
+        
+        added_count = len([m for m in new_members if not m.is_bot])
+        user_invites[user_id_str] += added_count
+        save_data(user_invites)
+        
+        current_count = user_invites[user_id_str]
+        
+        welcome_text = (
+            f"🇰🇬 Кош келиңиз, {inviter.first_name}! Сиз {current_count}/{REQUIRED_INVITES} адам чакырдыңыз.\n"
+            f"🇷🇺 Добро пожаловать! Вы пригласили {current_count}/{REQUIRED_INVITES} человек."
+        )
+        await message.reply_text(welcome_text)
 
-    key = make_key(message.chat_id, inviter.id)
-    user_invites[key] = user_invites.get(key, 0) + len(added)
-    save_data()
-
-    current = user_invites[key]
-    text = (
-        f"🇰🇬 Рахмат, {inviter.first_name}! Сиз {current}/{REQUIRED_INVITES} адам чакырдыңыз.\n"
-        f"🇷🇺 Спасибо! Вы пригласили {current}/{REQUIRED_INVITES} человек."
-    )
-    sent = await message.reply_text(text)
-    asyncio.create_task(delete_later(sent, WARNING_LIFETIME))
-
-
-# ---------- Эрежени көзөмөлдөө ----------
 async def enforce_invite_rule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.from_user:
         return
-
-    # Канал атынан же анонимдүү админ жазса - тийбейбиз
-    if message.sender_chat:
-        return
-
-    user = message.from_user
-    if user.is_bot:
-        return
-
+    
+    user_id = message.from_user.id
+    user_id_str = str(user_id)
+    
     try:
-        member = await context.bot.get_chat_member(message.chat_id, user.id)
+        chat_member = await context.bot.get_chat_member(message.chat.id, user_id)
+        if chat_member.status in ['creator', 'administrator']:
+            return
     except Exception:
-        logger.exception("get_chat_member ката берди")
-        return
+        pass
 
-    if member.status in ("creator", "administrator"):
-        return
-
-    invited = user_invites.get(make_key(message.chat_id, user.id), 0)
-    if invited >= REQUIRED_INVITES:
-        return
-
-    try:
-        await message.delete()
-    except Exception:
-        logger.exception("Билдирүү өчүрүлгөн жок (бот админби жана өчүрүү укугу барбы?)")
-        return
-
-    warning = (
-        f"⚠️ {user.first_name}, жазуу үчүн кеминде {REQUIRED_INVITES} адам чакырышыңыз керек! "
-        f"Азыркы чакырганыңыз: {invited}.\n\n"
-        f"⚠️ Чтобы писать в группу, нужно пригласить {REQUIRED_INVITES} человек! "
-        f"Вы пригласили: {invited}."
-    )
-    sent = await context.bot.send_message(chat_id=message.chat_id, text=warning)
-    asyncio.create_task(delete_later(sent, WARNING_LIFETIME))
-
+    invited = user_invites.get(user_id_str, 0)
+    
+    if invited < REQUIRED_INVITES:
+        try:
+            await message.delete()
+            warning_msg = (
+                f"⚠️ {message.from_user.first_name}, жазуу үчүн кеминде {REQUIRED_INVITES} адам чакырышыңыз керек! "
+                f"Азыркы чакырганыңыз: {invited}.\n\n"
+                f"⚠️ Чтобы писать в группу, нужно пригласить {REQUIRED_INVITES} человек! "
+                f"Вы пригласили: {invited}."
+            )
+            sent_msg = await context.bot.send_message(chat_id=message.chat_id, text=warning_msg)
+            
+            async def delete_warning():
+                await asyncio.sleep(WARNING_LIFETIME)
+                try:
+                    await sent_msg.delete()
+                except:
+                    pass
+            
+            asyncio.create_task(delete_warning())
+            
+        except Exception as e:
+            logger.error(f"Каталык пайда болду: {e}")
 
 if __name__ == '__main__':
-    print("Бот иштеп жатат...")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    logger.info("Веб-сервер ишке кирүүдө...")
+    t = Thread(target=run_web_server)
+    t.daemon = True
+    t.start()
+
+    logger.info("Бот иштеп жатат...")
+    
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(
-        MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, track_invites)
-    )
-    # Группадагы бардык билдирүүлөр (текст, сүрөт, видео ж.б.), команда жана тейлөө билдирүүлөрүнөн башка
-    app.add_handler(
-        MessageHandler(
-            filters.ChatType.GROUPS & ~filters.COMMAND & ~filters.StatusUpdate.ALL,
-            enforce_invite_rule,
-        )
-    )
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, track_invites))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enforce_invite_rule))
 
     app.run_polling()
