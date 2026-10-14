@@ -132,7 +132,7 @@ async def enforce_invite_rule(update: Update, context: ContextTypes.DEFAULT_TYPE
     asyncio.create_task(delete_later(sent, WARNING_LIFETIME))
 
 
-if name == '__main__':
+if __name__ == '__main__':
     print("Бот иштеп жатат...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
